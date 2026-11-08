@@ -1,5 +1,6 @@
 {
   description = "Shared Home Assistant dev/test environment for custom_components work";
+  # SPDX-License-Identifier: MIT
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";

@@ -7,6 +7,7 @@
 #   ha-dev status
 #   ha-dev logs -f
 #   ha-dev down
+#   ha-dev reset    # wipe .configuration/ for a fresh install
 #
 # The venv (Home Assistant itself) is shared across repos in
 # ~/.local/share/ha-dev (override with HA_DEV_HOME); it's expensive to
@@ -96,6 +97,12 @@ cmd_down() {
   echo "Stopped."
 }
 
+cmd_reset() {
+  is_running && cmd_down
+  rm -rf "$CFG"
+  echo "Reset - next 'ha-dev run' starts fresh onboarding."
+}
+
 cmd_status() {
   if is_running; then
     echo "running (pid $(cat "$PID_FILE"), http://127.0.0.1:$PORT)"
@@ -116,6 +123,7 @@ ha-dev - bare-bones Home Assistant dev server for this repo's custom_components
 
   ha-dev run       start HA against ./custom_components (or nearest parent)
   ha-dev down      stop it
+  ha-dev reset     wipe .configuration/ for a fresh install
   ha-dev status
   ha-dev logs [-f]
 EOF
@@ -126,6 +134,7 @@ main() {
   case "$cmd" in
     run) cmd_run "$@" ;;
     down) cmd_down "$@" ;;
+    reset) cmd_reset "$@" ;;
     status) cmd_status "$@" ;;
     logs) cmd_logs "$@" ;;
     help | -h | --help) cmd_help ;;

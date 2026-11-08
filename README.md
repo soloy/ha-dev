@@ -29,6 +29,7 @@ ha-dev run                     # http://127.0.0.1:8123, config in ./.configurati
 ha-dev status
 ha-dev logs -f
 ha-dev down
+ha-dev reset                   # wipe .configuration/ for a fresh install
 ```
 
 `ha-dev help` lists every command.

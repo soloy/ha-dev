@@ -4,9 +4,9 @@
 #
 #   ha-dev run      # auto-links ./custom_components (or nearest parent),
 #                    # config in ./.configuration/, http://localhost:8123
+#   ha-dev restart  # pick up custom_components changes
 #   ha-dev status
 #   ha-dev logs -f
-#   ha-dev restart  # pick up custom_components changes
 #   ha-dev down
 #   ha-dev reset    # wipe .configuration/ for a fresh install
 #
@@ -75,6 +75,7 @@ cmd_run() {
   nohup "$HASS" -c "$CFG" >"$CFG/hass-stdout.log" 2>&1 &
   echo $! >"$PID_FILE"
   for _ in $(seq 1 30); do
+    is_running || break
     sleep 1
     curl -s -o /dev/null "http://127.0.0.1:$PORT" && break
   done

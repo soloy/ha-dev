@@ -3,29 +3,34 @@
 # current repo. Run from inside the integration repo:
 #
 #   ha-dev run      # auto-links ./custom_components (or nearest parent),
-#                    # config in ./.configuration/, http://localhost:8123
+#                    # config in ./.configuration/, own port from 8123 up
 #   ha-dev restart  # pick up custom_components changes
 #   ha-dev status
 #   ha-dev logs -f
 #   ha-dev down
-#   ha-dev backup   # snapshot .configuration/ as the baseline reset restores to
-#   ha-dev reset    # wipe .configuration/, restoring the backup if there is one
+#   ha-dev reset    # wipe .configuration/ back to ha-dev's own baseline -
+#                    # onboarded admin + house + auto-login, no integration
+#                    # config - so you're never re-onboarding, only ever
+#                    # clearing out what your integration added
 #
-# The venv (Home Assistant itself) is shared across repos in
-# ~/.local/share/ha-dev (override with HA_DEV_HOME); it's expensive to
-# build and has nothing repo-specific in it. Everything repo-specific -
-# config, state, logs - lives in .configuration/ in the current repo.
+# Everything else lives in the current repo - delete the repo and it's all
+# gone, nothing left dangling elsewhere: Home Assistant itself is built once
+# into .configuration-venv/ (reused across restarts and resets, since it has
+# nothing repo-state-specific in it - only `reset` touches .configuration/).
+# Override with HA_DEV_HOME to share one venv across repos instead (faster,
+# at the cost of a folder outside any of them).
 
 set -euo pipefail
 
-SHARE="${HA_DEV_HOME:-$HOME/.local/share/ha-dev}"
-VENV="$SHARE/venv"
+BASELINE="${BASELINE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/baseline}"
+
+VENV="$(pwd)/.configuration-venv"
+[ -n "${HA_DEV_HOME:-}" ] && VENV="$HA_DEV_HOME/venv"
 HASS="$VENV/bin/hass"
 
 CFG="$(pwd)/.configuration"
-BACKUP="$(pwd)/.configuration-backup"
 PID_FILE="$CFG/hass.pid"
-PORT=8123
+PORT_FILE="$CFG/.port"
 
 die() { echo "ha-dev: $*" >&2; exit 1; }
 
@@ -44,35 +49,70 @@ find_custom_components() {
 ensure_venv() {
   if [ ! -x "$HASS" ]; then
     command -v python3.13 >/dev/null 2>&1 || die "python3.13 not found on PATH"
-    echo "Setting up shared Home Assistant venv at $VENV (first run only) ..."
+    echo "Setting up Home Assistant venv at $VENV (first run only) ..."
     python3.13 -m venv "$VENV"
     "$VENV/bin/pip" install --upgrade pip -q
     "$VENV/bin/pip" install -q pytest-homeassistant-custom-component
-    # Core's service-schema validation imports homeassistant.components.conversation
-    # unconditionally (it's in _base_components()), but the test package above
-    # doesn't pull in its hassil/home-assistant-intents deps. Install whatever
-    # exact versions this HA release's own manifest pins, so it doesn't break.
+    # Core's service-schema validation (helpers/service.py _base_components())
+    # unconditionally imports camera/conversation/tts/stt/etc at startup,
+    # regardless of what's configured - but the test package above only
+    # pulls deps for components it tests. Walk those components' manifests
+    # (and whatever they in turn depend on) and install the full closure,
+    # so a fresh venv doesn't die on "Loading data" the first time it's used.
     "$VENV/bin/python" -c "
 import json, subprocess, sys
-manifest = '$VENV/lib/python3.13/site-packages/homeassistant/components/conversation/manifest.json'
-reqs = json.load(open(manifest))['requirements']
-subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-q', *reqs])
+from pathlib import Path
+base = Path('$VENV') / 'lib/python3.13/site-packages/homeassistant/components'
+queue = ['ai_task', 'alarm_control_panel', 'assist_satellite', 'calendar',
+         'camera', 'climate', 'cover', 'fan', 'humidifier', 'light', 'lock',
+         'media_player', 'notify', 'remote', 'siren', 'todo', 'update',
+         'vacuum', 'water_heater']
+seen, reqs = set(queue), set()
+while queue:
+    manifest = base / queue.pop() / 'manifest.json'
+    if not manifest.exists():
+        continue
+    m = json.loads(manifest.read_text())
+    reqs.update(m.get('requirements', []))
+    for dep in m.get('dependencies', []) + m.get('after_dependencies', []):
+        if dep not in seen:
+            seen.add(dep)
+            queue.append(dep)
+if reqs:
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-q', *sorted(reqs)])
 "
   fi
 }
 
-ensure_config() {
-  mkdir -p "$CFG"
-  ln -sfn "$(find_custom_components)" "$CFG/custom_components"
-  if [ ! -f "$CFG/configuration.yaml" ]; then
-    cat >"$CFG/configuration.yaml" <<EOF
-http:
-  server_host: 127.0.0.1
-  server_port: $PORT
-frontend:
-config:
-EOF
+ensure_port() {
+  if [ -f "$PORT_FILE" ]; then
+    PORT="$(cat "$PORT_FILE")"
+    return
   fi
+  PORT=8123
+  while lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; do
+    PORT=$((PORT + 1))
+  done
+  mkdir -p "$CFG"
+  echo "$PORT" >"$PORT_FILE"
+}
+
+ensure_config() {
+  if [ ! -d "$CFG" ]; then
+    cp -a "$BASELINE" "$CFG"
+    # $BASELINE may be a read-only Nix store path; cp -a preserves that,
+    # which would leave $CFG impossible to write into (HA's own state, our
+    # own .port) - make this repo's copy ours to write.
+    chmod -R u+w "$CFG"
+    echo "No .configuration/ yet - seeded from ha-dev's baseline (onboarded, auto-login, no integration config)."
+  fi
+  ensure_port
+  ln -sfn "$(find_custom_components)" "$CFG/custom_components"
+  # this repo's own port, even right after seeding from the baseline.
+  # (a temp file + mv, not sed -i: BSD and GNU sed take -i differently,
+  # and this runs under whichever one is on PATH)
+  sed -E "s/^( *server_port: *).*/\1$PORT/" "$CFG/configuration.yaml" >"$CFG/configuration.yaml.tmp"
+  mv "$CFG/configuration.yaml.tmp" "$CFG/configuration.yaml"
 }
 
 is_running() {
@@ -86,13 +126,18 @@ cmd_run() {
   echo "Starting Home Assistant ..."
   nohup "$HASS" -c "$CFG" >"$CFG/hass-stdout.log" 2>&1 &
   echo $! >"$PID_FILE"
+  local answered=
   for _ in $(seq 1 30); do
     is_running || break
+    curl -s -o /dev/null "http://127.0.0.1:$PORT" && { answered=1; break; }
     sleep 1
-    curl -s -o /dev/null "http://127.0.0.1:$PORT" && break
   done
-  if is_running; then
+  if [ -n "$answered" ]; then
     echo "Up: http://127.0.0.1:$PORT (pid $(cat "$PID_FILE"))"
+  elif is_running; then
+    kill "$(cat "$PID_FILE")" 2>/dev/null || true
+    rm -f "$PID_FILE"
+    die "started but never answered on port $PORT - check $CFG/hass-stdout.log"
   else
     die "process died on startup - check $CFG/hass-stdout.log"
   fi
@@ -111,23 +156,10 @@ cmd_down() {
   echo "Stopped."
 }
 
-cmd_backup() {
-  [ -d "$CFG" ] || die "no .configuration/ yet - run 'ha-dev run' first"
-  is_running && cmd_down
-  rm -rf "$BACKUP"
-  cp -a "$CFG" "$BACKUP"
-  echo "Backed up to $BACKUP - 'ha-dev reset' now restores this."
-}
-
 cmd_reset() {
   is_running && cmd_down
   rm -rf "$CFG"
-  if [ -d "$BACKUP" ]; then
-    cp -a "$BACKUP" "$CFG"
-    echo "Reset - restored from backup."
-  else
-    echo "Reset - no backup found, next 'ha-dev run' starts fresh onboarding."
-  fi
+  echo "Reset - next 'ha-dev run' restores ha-dev's baseline (onboarded, no integration config)."
 }
 
 cmd_restart() {
@@ -136,6 +168,7 @@ cmd_restart() {
 }
 
 cmd_status() {
+  [ -f "$PORT_FILE" ] && PORT="$(cat "$PORT_FILE")" || PORT="?"
   if is_running; then
     echo "running (pid $(cat "$PID_FILE"), http://127.0.0.1:$PORT)"
   else
@@ -156,10 +189,14 @@ ha-dev - bare-bones Home Assistant dev server for this repo's custom_components
   ha-dev run       start HA against ./custom_components (or nearest parent)
   ha-dev restart   stop + start again (pick up custom_components changes)
   ha-dev down      stop it
-  ha-dev backup    snapshot .configuration/ as the baseline reset restores to
-  ha-dev reset     wipe .configuration/, restoring the backup if there is one
+  ha-dev reset     wipe .configuration/ back to ha-dev's baseline (onboarded,
+                   auto-login, no integration config)
   ha-dev status
   ha-dev logs [-f]
+
+HA itself is built once into .configuration-venv/ in this repo - delete the
+repo and everything's gone, nothing left elsewhere. Set HA_DEV_HOME to share
+one venv across repos instead.
 EOF
 }
 
@@ -169,7 +206,6 @@ main() {
     run) cmd_run "$@" ;;
     restart) cmd_restart "$@" ;;
     down) cmd_down "$@" ;;
-    backup) cmd_backup "$@" ;;
     reset) cmd_reset "$@" ;;
     status) cmd_status "$@" ;;
     logs) cmd_logs "$@" ;;

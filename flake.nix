@@ -15,7 +15,13 @@
         ha-dev = pkgs.writeShellApplication {
           name = "ha-dev";
           runtimeInputs = [ pkgs.python313 ];
-          text = builtins.readFile ./bin/ha-dev;
+          # BASELINE pinned to this package's own copy of ./baseline (in the
+          # Nix store), overriding the script's bash-source-relative fallback
+          # that's only there for running bin/ha-dev directly, unpackaged.
+          text = ''
+            BASELINE="${./baseline}"
+          ''
+          + builtins.readFile ./bin/ha-dev;
           excludeShellChecks = [ "SC2155" ];
         };
       in

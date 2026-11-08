@@ -4,10 +4,14 @@ Bare-bones Home Assistant dev server for whatever `custom_components` you're
 building. No per-repo setup: run `ha-dev` from inside the integration repo
 and it finds `custom_components` itself.
 
-The Home Assistant venv is shared across repos in `~/.local/share/ha-dev`
-(override with `HA_DEV_HOME`) since it's expensive to build and has nothing
-repo-specific in it. Everything repo-specific - config, state, logs - lives
-in `.configuration/` in the current repo (gitignore it).
+Everything lives in the current repo: Home Assistant itself is built once
+into `.configuration-venv/` (gitignore it), and config, state, logs and port
+live in `.configuration/` (gitignore it too). Delete the repo and the whole
+dev env is gone with it - nothing left dangling elsewhere. Each repo gets
+its own isolated instance and several can run at once.
+
+Set `HA_DEV_HOME` to a shared directory instead if you'd rather trade that
+self-containedness for not rebuilding the venv per repo.
 
 ## Use from another repo's flake
 
@@ -25,25 +29,31 @@ Then `ha-dev` is just on PATH in that repo's `nix develop` - no `cd`.
 
 ```bash
 cd your-integration-repo       # has ./custom_components somewhere in it
-ha-dev run                     # http://127.0.0.1:8123, config in ./.configuration/
+ha-dev run                     # picks a free port starting at 8123, config in ./.configuration/
 ha-dev restart                 # pick up custom_components changes
 ha-dev status
 ha-dev logs -f
 ha-dev down
-ha-dev backup                  # snapshot .configuration/ as the baseline reset restores to
-ha-dev reset                   # wipe .configuration/, restoring the backup if there is one
+ha-dev reset                   # wipe .configuration/ back to ha-dev's baseline
 ```
 
 `ha-dev help` lists every command.
 
-### Getting a ready-to-use baseline
+### The baseline
 
-By default `reset` just wipes `.configuration/` - the next `run` starts a
-fresh onboarding wizard. To skip that every time: complete onboarding once
-in the browser (create the admin user, set the house location), then run
-`ha-dev backup`. From then on `ha-dev reset` restores that snapshot instead
-of wiping to nothing, so you get a logged-in dashboard with the house
-already set up, not the onboarding wizard.
+[`baseline/`](baseline/) in this repo *is* the ready-to-use dev env: an
+already-onboarded admin user, house location, and `trusted_networks`
+auto-login (so the browser skips the login screen entirely), with no
+integration config in it. A `run` against a missing `.configuration/` (a
+fresh clone, or after `reset`) seeds it from there.
+
+Dev login for this instance: `dev` / `dev12345`. You shouldn't need it -
+`trusted_networks` logs you in automatically from `127.0.0.1` - but it's
+there if you ever hit a login screen.
+
+That means `ha-dev reset` never makes you re-onboard - it only clears out
+whatever config entries/devices/entities *your* integration under test
+added, back to that clean baseline, every time.
 
 ## Standalone setup
 

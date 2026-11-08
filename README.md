@@ -30,10 +30,20 @@ ha-dev restart                 # pick up custom_components changes
 ha-dev status
 ha-dev logs -f
 ha-dev down
-ha-dev reset                   # wipe .configuration/ for a fresh install
+ha-dev backup                  # snapshot .configuration/ as the baseline reset restores to
+ha-dev reset                   # wipe .configuration/, restoring the backup if there is one
 ```
 
 `ha-dev help` lists every command.
+
+### Getting a ready-to-use baseline
+
+By default `reset` just wipes `.configuration/` - the next `run` starts a
+fresh onboarding wizard. To skip that every time: complete onboarding once
+in the browser (create the admin user, set the house location), then run
+`ha-dev backup`. From then on `ha-dev reset` restores that snapshot instead
+of wiping to nothing, so you get a logged-in dashboard with the house
+already set up, not the onboarding wizard.
 
 ## Standalone setup
 

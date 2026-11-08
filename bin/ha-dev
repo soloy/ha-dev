@@ -8,7 +8,8 @@
 #   ha-dev status
 #   ha-dev logs -f
 #   ha-dev down
-#   ha-dev reset    # wipe .configuration/ for a fresh install
+#   ha-dev backup   # snapshot .configuration/ as the baseline reset restores to
+#   ha-dev reset    # wipe .configuration/, restoring the backup if there is one
 #
 # The venv (Home Assistant itself) is shared across repos in
 # ~/.local/share/ha-dev (override with HA_DEV_HOME); it's expensive to
@@ -22,6 +23,7 @@ VENV="$SHARE/venv"
 HASS="$VENV/bin/hass"
 
 CFG="$(pwd)/.configuration"
+BACKUP="$(pwd)/.configuration-backup"
 PID_FILE="$CFG/hass.pid"
 PORT=8123
 
@@ -46,6 +48,16 @@ ensure_venv() {
     python3.13 -m venv "$VENV"
     "$VENV/bin/pip" install --upgrade pip -q
     "$VENV/bin/pip" install -q pytest-homeassistant-custom-component
+    # Core's service-schema validation imports homeassistant.components.conversation
+    # unconditionally (it's in _base_components()), but the test package above
+    # doesn't pull in its hassil/home-assistant-intents deps. Install whatever
+    # exact versions this HA release's own manifest pins, so it doesn't break.
+    "$VENV/bin/python" -c "
+import json, subprocess, sys
+manifest = '$VENV/lib/python3.13/site-packages/homeassistant/components/conversation/manifest.json'
+reqs = json.load(open(manifest))['requirements']
+subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-q', *reqs])
+"
   fi
 }
 
@@ -99,10 +111,23 @@ cmd_down() {
   echo "Stopped."
 }
 
+cmd_backup() {
+  [ -d "$CFG" ] || die "no .configuration/ yet - run 'ha-dev run' first"
+  is_running && cmd_down
+  rm -rf "$BACKUP"
+  cp -a "$CFG" "$BACKUP"
+  echo "Backed up to $BACKUP - 'ha-dev reset' now restores this."
+}
+
 cmd_reset() {
   is_running && cmd_down
   rm -rf "$CFG"
-  echo "Reset - next 'ha-dev run' starts fresh onboarding."
+  if [ -d "$BACKUP" ]; then
+    cp -a "$BACKUP" "$CFG"
+    echo "Reset - restored from backup."
+  else
+    echo "Reset - no backup found, next 'ha-dev run' starts fresh onboarding."
+  fi
 }
 
 cmd_restart() {
@@ -131,7 +156,8 @@ ha-dev - bare-bones Home Assistant dev server for this repo's custom_components
   ha-dev run       start HA against ./custom_components (or nearest parent)
   ha-dev restart   stop + start again (pick up custom_components changes)
   ha-dev down      stop it
-  ha-dev reset     wipe .configuration/ for a fresh install
+  ha-dev backup    snapshot .configuration/ as the baseline reset restores to
+  ha-dev reset     wipe .configuration/, restoring the backup if there is one
   ha-dev status
   ha-dev logs [-f]
 EOF
@@ -143,6 +169,7 @@ main() {
     run) cmd_run "$@" ;;
     restart) cmd_restart "$@" ;;
     down) cmd_down "$@" ;;
+    backup) cmd_backup "$@" ;;
     reset) cmd_reset "$@" ;;
     status) cmd_status "$@" ;;
     logs) cmd_logs "$@" ;;

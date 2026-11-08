@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# Bare-bones Home Assistant dev server for the custom_components in the
+# current repo. Run from inside the integration repo:
+#
+#   ha-dev run      # auto-links ./custom_components (or nearest parent),
+#                    # config in ./.configuration/, http://localhost:8123
+#   ha-dev status
+#   ha-dev logs -f
+#   ha-dev down
+#
+# The venv (Home Assistant itself) is shared across repos in
+# ~/.local/share/ha-dev (override with HA_DEV_HOME); it's expensive to
+# build and has nothing repo-specific in it. Everything repo-specific -
+# config, state, logs - lives in .configuration/ in the current repo.
+
+set -euo pipefail
+
+SHARE="${HA_DEV_HOME:-$HOME/.local/share/ha-dev}"
+VENV="$SHARE/venv"
+HASS="$VENV/bin/hass"
+
+CFG="$(pwd)/.configuration"
+PID_FILE="$CFG/hass.pid"
+PORT=8123
+
+die() { echo "ha-dev: $*" >&2; exit 1; }
+
+find_custom_components() {
+  local dir="$(pwd)"
+  while [ "$dir" != "/" ]; do
+    if [ -d "$dir/custom_components" ]; then
+      echo "$dir/custom_components"
+      return
+    fi
+    dir="$(dirname "$dir")"
+  done
+  die "no custom_components/ found in $(pwd) or any parent directory"
+}
+
+ensure_venv() {
+  if [ ! -x "$HASS" ]; then
+    command -v python3.13 >/dev/null 2>&1 || die "python3.13 not found on PATH"
+    echo "Setting up shared Home Assistant venv at $VENV (first run only) ..."
+    python3.13 -m venv "$VENV"
+    "$VENV/bin/pip" install --upgrade pip -q
+    "$VENV/bin/pip" install -q pytest-homeassistant-custom-component
+  fi
+}
+
+ensure_config() {
+  mkdir -p "$CFG"
+  ln -sfn "$(find_custom_components)" "$CFG/custom_components"
+  if [ ! -f "$CFG/configuration.yaml" ]; then
+    cat >"$CFG/configuration.yaml" <<EOF
+http:
+  server_host: 127.0.0.1
+  server_port: $PORT
+frontend:
+config:
+EOF
+  fi
+}
+
+is_running() {
+  [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+}
+
+cmd_run() {
+  is_running && die "already running (pid $(cat "$PID_FILE"))"
+  ensure_venv
+  ensure_config
+  echo "Starting Home Assistant ..."
+  nohup "$HASS" -c "$CFG" >"$CFG/hass-stdout.log" 2>&1 &
+  echo $! >"$PID_FILE"
+  for _ in $(seq 1 30); do
+    sleep 1
+    curl -s -o /dev/null "http://127.0.0.1:$PORT" && break
+  done
+  if is_running; then
+    echo "Up: http://127.0.0.1:$PORT (pid $(cat "$PID_FILE"))"
+  else
+    die "process died on startup - check $CFG/hass-stdout.log"
+  fi
+}
+
+cmd_down() {
+  is_running || { echo "not running."; return 0; }
+  local pid; pid="$(cat "$PID_FILE")"
+  kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 15); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 1
+  done
+  kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+  rm -f "$PID_FILE"
+  echo "Stopped."
+}
+
+cmd_status() {
+  if is_running; then
+    echo "running (pid $(cat "$PID_FILE"), http://127.0.0.1:$PORT)"
+  else
+    echo "stopped"
+  fi
+}
+
+cmd_logs() {
+  local f="$CFG/home-assistant.log"
+  [ -f "$f" ] || die "no log yet - run 'ha-dev run' first"
+  if [ "${1:-}" = "-f" ]; then tail -f "$f"; else tail -n 100 "$f"; fi
+}
+
+cmd_help() {
+  cat <<EOF
+ha-dev - bare-bones Home Assistant dev server for this repo's custom_components
+
+  ha-dev run       start HA against ./custom_components (or nearest parent)
+  ha-dev down      stop it
+  ha-dev status
+  ha-dev logs [-f]
+EOF
+}
+
+main() {
+  local cmd="${1:-help}"; shift || true
+  case "$cmd" in
+    run) cmd_run "$@" ;;
+    down) cmd_down "$@" ;;
+    status) cmd_status "$@" ;;
+    logs) cmd_logs "$@" ;;
+    help | -h | --help) cmd_help ;;
+    *) die "unknown command: $cmd (run 'ha-dev help')" ;;
+  esac
+}
+
+main "$@"

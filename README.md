@@ -26,6 +26,7 @@ Then `ha-dev` is just on PATH in that repo's `nix develop` - no `cd`.
 ```bash
 cd your-integration-repo       # has ./custom_components somewhere in it
 ha-dev run                     # http://127.0.0.1:8123, config in ./.configuration/
+ha-dev restart                 # pick up custom_components changes
 ha-dev status
 ha-dev logs -f
 ha-dev down

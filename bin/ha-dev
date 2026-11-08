@@ -6,6 +6,7 @@
 #                    # config in ./.configuration/, http://localhost:8123
 #   ha-dev status
 #   ha-dev logs -f
+#   ha-dev restart  # pick up custom_components changes
 #   ha-dev down
 #   ha-dev reset    # wipe .configuration/ for a fresh install
 #
@@ -103,6 +104,11 @@ cmd_reset() {
   echo "Reset - next 'ha-dev run' starts fresh onboarding."
 }
 
+cmd_restart() {
+  is_running && cmd_down
+  cmd_run
+}
+
 cmd_status() {
   if is_running; then
     echo "running (pid $(cat "$PID_FILE"), http://127.0.0.1:$PORT)"
@@ -122,6 +128,7 @@ cmd_help() {
 ha-dev - bare-bones Home Assistant dev server for this repo's custom_components
 
   ha-dev run       start HA against ./custom_components (or nearest parent)
+  ha-dev restart   stop + start again (pick up custom_components changes)
   ha-dev down      stop it
   ha-dev reset     wipe .configuration/ for a fresh install
   ha-dev status
@@ -133,6 +140,7 @@ main() {
   local cmd="${1:-help}"; shift || true
   case "$cmd" in
     run) cmd_run "$@" ;;
+    restart) cmd_restart "$@" ;;
     down) cmd_down "$@" ;;
     reset) cmd_reset "$@" ;;
     status) cmd_status "$@" ;;
